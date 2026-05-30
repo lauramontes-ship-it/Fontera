@@ -1,27 +1,29 @@
 # ============================================================
-#  FRONTERA EFICIENTE DE MARKOWITZ
+#  FRONTERA EFICIENTE DE MARKOWITZ — App Streamlit
 #  Dependencias del proyecto
 # ============================================================
 #
-#  Instalación:
+#  Instalación local:
 #    pip install -r requirements.txt
+#
+#  Ejecución local:
+#    streamlit run frontera_eficiente_markowitz.py
 #
 # ============================================================
 
+# Interfaz web interactiva (app principal)
+streamlit==1.41.0
+
 # Cálculo numérico y álgebra lineal (matrices de covarianza,
 # pesos de portafolio, operaciones vectorizadas)
-numpy==2.4.4
+numpy==2.2.0
 
-# Manipulación de datos tabulares y lectura de archivos Excel
-pandas==3.0.2
+# Manipulación de datos tabulares
+pandas==2.2.3
 
-# Visualización: gráficos de frontera eficiente, Monte Carlo,
-# barras, pie chart y anotaciones
-matplotlib==3.10.8
+# Gráficos interactivos (reemplaza matplotlib para Streamlit)
+plotly==5.24.1
 
-# Optimización cuadrática para cálculo de portafolios óptimos
-# (mínima varianza, máximo Sharpe, frontera eficiente)
-scipy==1.17.1
-
-# Motor de lectura de archivos .xlsx (dependencia de pandas)
-openpyxl>=3.1.0
+# Optimización cuadrática: mínima varianza, máximo Sharpe,
+# cálculo de la frontera eficiente punto a punto
+scipy==1.15.0
