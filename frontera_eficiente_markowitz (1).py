@@ -1,6 +1,6 @@
 """
 =============================================================
-  FRONTERA EFICIENTE DE MARKOWITZ
+  FRONTERA EFICIENTE DE MARKOWITZ — APP STREAMLIT
   Portafolio: AMZN | BTC | HSBCSGE | SP500 | GC=F
 =============================================================
   Datos extraídos del archivo:
@@ -9,23 +9,59 @@
   Dependencias (ver requirements.txt):
     pip install -r requirements.txt
 
+  Ejecución local:
+    streamlit run frontera_eficiente_markowitz.py
+
   Librerías utilizadas:
-    numpy==2.4.4      → álgebra lineal, matrices de covarianza
-    pandas==3.0.2     → manipulación de datos y lectura Excel
-    matplotlib==3.10.8 → visualización y gráficos
-    scipy==1.17.1     → optimización cuadrática (frontera)
-    openpyxl>=3.1.0   → motor de lectura .xlsx (vía pandas)
+    streamlit==1.41.0  → interfaz web interactiva
+    numpy==2.2.0       → álgebra lineal, matrices de covarianza
+    pandas==2.2.3      → manipulación de datos
+    plotly==5.24.1     → gráficos interactivos
+    scipy==1.15.0      → optimización cuadrática (frontera)
 =============================================================
 """
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.lines import Line2D
-from scipy.optimize import minimize, linprog
 import warnings
 warnings.filterwarnings("ignore")
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+from scipy.optimize import minimize
+
+# ─────────────────────────────────────────────────────────────
+#  CONFIGURACIÓN DE PÁGINA
+# ─────────────────────────────────────────────────────────────
+
+st.set_page_config(
+    page_title="Frontera Eficiente · Markowitz",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# CSS personalizado
+st.markdown("""
+<style>
+    .main { background-color: #0d1117; }
+    .block-container { padding-top: 1.5rem; }
+    .metric-card {
+        background: #161b22;
+        border: 1px solid #21262d;
+        border-radius: 10px;
+        padding: 1rem 1.2rem;
+        text-align: center;
+    }
+    .metric-value { font-size: 1.6rem; font-weight: 700; color: #58a6ff; }
+    .metric-label { font-size: 0.78rem; color: #8b949e; margin-top: 2px; }
+    h1, h2, h3 { color: #e6edf3 !important; }
+    .stTabs [data-baseweb="tab"] { color: #8b949e; }
+    .stTabs [aria-selected="true"] { color: #58a6ff !important; border-bottom-color: #58a6ff !important; }
+</style>
+""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────
 #  1. DATOS DEL MODELO (extraídos del Excel)
@@ -34,22 +70,10 @@ warnings.filterwarnings("ignore")
 ACTIVOS = ["AMZN", "BTC", "HSBC-SGE", "SP500", "GC=F"]
 N = len(ACTIVOS)
 
-# Rentabilidades diarias
-RENT_DIARIA = np.array([0.000545, 0.000833, 0.000267, 0.000518, 0.000863])
-
-# Volatilidades diarias
-VOL_DIARIA = np.array([0.022135, 0.032272, 0.009071, 0.010642, 0.010819])
-
-# Rentabilidades anualizadas
 RENT_ANUAL = np.array([0.146510, 0.232469, 0.069322, 0.138868, 0.241717])
+VOL_ANUAL  = np.array([0.350689, 0.511291, 0.143709, 0.168599, 0.171409])
+I_SHARPE   = np.array([0.417779, 0.454671, 0.482381, 0.823660, 1.410171])
 
-# Volatilidades anualizadas
-VOL_ANUAL = np.array([0.350689, 0.511291, 0.143709, 0.168599, 0.171409])
-
-# Ratios de Sharpe individuales (tasa libre de riesgo ≈ 0)
-I_SHARPE = np.array([0.417779, 0.454671, 0.482381, 0.823660, 1.410171])
-
-# Matriz de covarianzas (diaria)
 COV_DIARIA = np.array([
     [ 4.8997e-04,  1.2105e-05,  8.3339e-06,  1.6894e-04, -3.9888e-06],
     [ 1.2105e-05,  1.0415e-03,  1.5533e-05, -1.6981e-06,  7.2993e-06],
@@ -57,410 +81,426 @@ COV_DIARIA = np.array([
     [ 1.6894e-04, -1.6981e-06,  7.9888e-06,  1.1325e-04, -2.7637e-06],
     [-3.9888e-06,  7.2993e-06,  5.0032e-07, -2.7637e-06,  1.1834e-04],
 ])
-
-# Matriz de covarianzas anualizada (× 252 días)
 COV_ANUAL = COV_DIARIA * 252
 
-# Portafolio óptimo (máx. Sharpe) del modelo
-MEZCLA_OPTIMA = np.array([0.233684, 0.245244, 0.118336, 0.148318, 0.254418])
-
-# KPIs del portafolio óptimo
-PORT_VOL_DIARIA  = 0.010751   # Desviación estándar diaria
-PORT_RENT_DIARIA = 0.000660   # Rendimiento efectivo diario
-PORT_VOL_ANUAL   = 0.170323   # Desviación estándar anualizada
-PORT_RENT_ANUAL  = 0.180000   # Rendimiento anualizado
-PORT_SHARPE      = 1.056816   # Índice de Sharpe del portafolio
+MEZCLA_OPTIMA   = np.array([0.233684, 0.245244, 0.118336, 0.148318, 0.254418])
+PORT_VOL_DIARIA = 0.010751
+PORT_SHARPE     = 1.056816
 
 # ─────────────────────────────────────────────────────────────
 #  2. FUNCIONES DE OPTIMIZACIÓN
 # ─────────────────────────────────────────────────────────────
 
-def portafolio_rendimiento(pesos, rentabilidades=RENT_ANUAL):
-    """Rentabilidad esperada del portafolio."""
-    return np.dot(pesos, rentabilidades)
+def port_ret(w):
+    return float(np.dot(w, RENT_ANUAL))
 
+def port_vol(w):
+    return float(np.sqrt(w @ COV_ANUAL @ w))
 
-def portafolio_volatilidad(pesos, cov=COV_ANUAL):
-    """Volatilidad (desviación estándar) anualizada del portafolio."""
-    return np.sqrt(pesos @ cov @ pesos)
+def neg_sharpe(w, rf=0.0):
+    return -(port_ret(w) - rf) / port_vol(w)
 
+@st.cache_data
+def calcular_minima_varianza():
+    res = minimize(port_vol, np.ones(N)/N, method="SLSQP",
+                   bounds=[(0,1)]*N,
+                   constraints={"type":"eq","fun":lambda w: np.sum(w)-1})
+    return res.x
 
-def neg_sharpe(pesos, rf=0.0, cov=COV_ANUAL, rentabilidades=RENT_ANUAL):
-    """Negativo del ratio de Sharpe (para minimización)."""
-    ret = portafolio_rendimiento(pesos, rentabilidades)
-    vol = portafolio_volatilidad(pesos, cov)
-    return -(ret - rf) / vol
+@st.cache_data
+def calcular_maximo_sharpe(rf=0.0):
+    res = minimize(neg_sharpe, np.ones(N)/N, args=(rf,), method="SLSQP",
+                   bounds=[(0,1)]*N,
+                   constraints={"type":"eq","fun":lambda w: np.sum(w)-1})
+    return res.x
 
+@st.cache_data
+def calcular_frontera(n_puntos=400):
+    vols, rets = [], []
+    for obj in np.linspace(np.min(RENT_ANUAL), np.max(RENT_ANUAL), n_puntos):
+        res = minimize(port_vol, np.ones(N)/N, method="SLSQP",
+                       bounds=[(0,1)]*N,
+                       constraints=[
+                           {"type":"eq","fun":lambda w: np.sum(w)-1},
+                           {"type":"eq","fun":lambda w, t=obj: port_ret(w)-t},
+                       ])
+        if res.success:
+            vols.append(port_vol(res.x))
+            rets.append(obj)
+    return np.array(vols), np.array(rets)
 
-def portafolio_minima_varianza(cov=COV_ANUAL):
-    """Portafolio de mínima varianza global."""
-    constraints = {"type": "eq", "fun": lambda w: np.sum(w) - 1}
-    bounds = [(0, 1)] * N
-    w0 = np.ones(N) / N
-    result = minimize(
-        lambda w: portafolio_volatilidad(w, cov),
-        w0,
-        method="SLSQP",
-        bounds=bounds,
-        constraints=constraints,
-    )
-    return result.x
-
-
-def portafolio_maximo_sharpe(rf=0.0, cov=COV_ANUAL, rentabilidades=RENT_ANUAL):
-    """Portafolio de máximo Sharpe ratio."""
-    constraints = {"type": "eq", "fun": lambda w: np.sum(w) - 1}
-    bounds = [(0, 1)] * N
-    w0 = np.ones(N) / N
-    result = minimize(
-        neg_sharpe,
-        w0,
-        args=(rf, cov, rentabilidades),
-        method="SLSQP",
-        bounds=bounds,
-        constraints=constraints,
-    )
-    return result.x
-
-
-def frontera_eficiente(n_puntos=500, cov=COV_ANUAL, rentabilidades=RENT_ANUAL):
-    """
-    Calcula la frontera eficiente de Markowitz.
-    Devuelve arrays de volatilidades y rendimientos.
-    """
-    ret_min = np.min(rentabilidades)
-    ret_max = np.max(rentabilidades)
-    objetivos = np.linspace(ret_min, ret_max, n_puntos)
-
-    vols, rets, pesos_lista = [], [], []
-
-    w_min = portafolio_minima_varianza(cov)
-    ret_minvar = portafolio_rendimiento(w_min, rentabilidades)
-
-    for objetivo in objetivos:
-        constraints = [
-            {"type": "eq", "fun": lambda w: np.sum(w) - 1},
-            {"type": "eq", "fun": lambda w, t=objetivo: portafolio_rendimiento(w, rentabilidades) - t},
-        ]
-        bounds = [(0, 1)] * N
-        w0 = np.ones(N) / N
-        result = minimize(
-            lambda w: portafolio_volatilidad(w, cov),
-            w0,
-            method="SLSQP",
-            bounds=bounds,
-            constraints=constraints,
-        )
-        if result.success:
-            vol = portafolio_volatilidad(result.x, cov)
-            vols.append(vol)
-            rets.append(objetivo)
-            pesos_lista.append(result.x)
-
-    return np.array(vols), np.array(rets), pesos_lista
-
-
-def simulacion_montecarlo(n_sim=8000, cov=COV_ANUAL, rentabilidades=RENT_ANUAL, seed=42):
-    """Simulación Monte Carlo de portafolios aleatorios."""
+@st.cache_data
+def montecarlo(n_sim=6000, seed=42):
     rng = np.random.default_rng(seed)
-    weights = rng.dirichlet(np.ones(N), size=n_sim)
-    vols = np.array([portafolio_volatilidad(w, cov) for w in weights])
-    rets = np.array([portafolio_rendimiento(w, rentabilidades) for w in weights])
+    W = rng.dirichlet(np.ones(N), size=n_sim)
+    vols    = np.array([port_vol(w) for w in W])
+    rets    = np.array([port_ret(w) for w in W])
     sharpes = rets / vols
-    return vols, rets, sharpes, weights
-
-
-# ─────────────────────────────────────────────────────────────
-#  3. CÁLCULOS PRINCIPALES
-# ─────────────────────────────────────────────────────────────
-
-print("=" * 65)
-print("  ANÁLISIS DE PORTAFOLIO — FRONTERA EFICIENTE DE MARKOWITZ")
-print("=" * 65)
-
-# Portafolios clave
-w_minvar   = portafolio_minima_varianza()
-w_maxsharpe = portafolio_maximo_sharpe()
-
-ret_minvar  = portafolio_rendimiento(w_minvar)
-vol_minvar  = portafolio_volatilidad(w_minvar)
-
-ret_maxsharpe = portafolio_rendimiento(w_maxsharpe)
-vol_maxsharpe = portafolio_volatilidad(w_maxsharpe)
-
-# Portafolio del modelo (datos del Excel)
-ret_modelo = portafolio_rendimiento(MEZCLA_OPTIMA)
-vol_modelo = portafolio_volatilidad(MEZCLA_OPTIMA)
-
-# Frontera eficiente y Monte Carlo
-print("\n[1/3] Calculando frontera eficiente...")
-fe_vols, fe_rets, fe_pesos = frontera_eficiente(n_puntos=500)
-
-print("[2/3] Ejecutando simulación Monte Carlo (8 000 portafolios)...")
-mc_vols, mc_rets, mc_sharpes, mc_weights = simulacion_montecarlo(n_sim=8000)
-
-print("[3/3] Generando visualización...\n")
+    return vols, rets, sharpes
 
 # ─────────────────────────────────────────────────────────────
-#  4. REPORTE EN CONSOLA
+#  3. SIDEBAR — PARÁMETROS
 # ─────────────────────────────────────────────────────────────
 
-print("\n── ACTIVOS INDIVIDUALES ─────────────────────────────────────")
-header = f"{'Activo':>12} {'Rent. Anual':>12} {'Vol. Anual':>12} {'Sharpe':>10}"
-print(header)
-print("─" * len(header))
-for i, nombre in enumerate(ACTIVOS):
-    print(f"{nombre:>12} {RENT_ANUAL[i]:>11.2%} {VOL_ANUAL[i]:>11.2%} {I_SHARPE[i]:>10.4f}")
+with st.sidebar:
+    st.markdown("## ⚙️ Parámetros")
+    st.markdown("---")
 
-print("\n── PORTAFOLIOS ÓPTIMOS ──────────────────────────────────────")
-print(f"\n  Portafolio de MÍNIMA VARIANZA")
-print(f"    Rentabilidad anual : {ret_minvar:.2%}")
-print(f"    Volatilidad anual  : {vol_minvar:.2%}")
-print(f"    Ratio de Sharpe    : {ret_minvar/vol_minvar:.4f}")
-print(f"    Pesos              : ", end="")
-for nombre, w in zip(ACTIVOS, w_minvar):
-    print(f"{nombre}={w:.1%} ", end="")
+    rf_pct = st.slider("Tasa libre de riesgo (%)", 0.0, 8.0, 0.0, 0.25,
+                       help="Tasa anualizada. Afecta CML y Sharpe óptimo.")
+    rf = rf_pct / 100
 
-print(f"\n\n  Portafolio MÁXIMO SHARPE (calculado)")
-print(f"    Rentabilidad anual : {ret_maxsharpe:.2%}")
-print(f"    Volatilidad anual  : {vol_maxsharpe:.2%}")
-print(f"    Ratio de Sharpe    : {ret_maxsharpe/vol_maxsharpe:.4f}")
-print(f"    Pesos              : ", end="")
-for nombre, w in zip(ACTIVOS, w_maxsharpe):
-    print(f"{nombre}={w:.1%} ", end="")
+    n_sim = st.select_slider("Simulaciones Monte Carlo",
+                              options=[2000, 4000, 6000, 8000, 10000], value=6000)
 
-print(f"\n\n  Portafolio ÓPTIMO del modelo (Excel)")
-print(f"    Rentabilidad anual : {ret_modelo:.2%}  (modelo: {PORT_RENT_ANUAL:.2%})")
-print(f"    Volatilidad anual  : {vol_modelo:.2%}  (modelo: {PORT_VOL_ANUAL:.2%})")
-print(f"    Ratio de Sharpe    : {ret_modelo/vol_modelo:.4f}  (modelo: {PORT_SHARPE:.4f})")
-print(f"    Pesos              : ", end="")
-for nombre, w in zip(ACTIVOS, MEZCLA_OPTIMA):
-    print(f"{nombre}={w:.1%} ", end="")
-print()
+    n_fe = st.select_slider("Puntos en la frontera",
+                             options=[100, 200, 400, 600], value=400)
 
-print("\n── MATRIZ DE CORRELACIONES ──────────────────────────────────")
-# Correlación desde covarianza diaria
-stds = np.sqrt(np.diag(COV_DIARIA))
-corr = COV_DIARIA / np.outer(stds, stds)
-corr_df = pd.DataFrame(corr, index=ACTIVOS, columns=ACTIVOS)
-print(corr_df.round(4).to_string())
+    mostrar_cml   = st.checkbox("Mostrar CML",              value=True)
+    mostrar_activos = st.checkbox("Mostrar activos individuales", value=True)
+    mostrar_modelo  = st.checkbox("Mostrar portafolio del modelo Excel", value=True)
+
+    st.markdown("---")
+    st.markdown("**Activos del portafolio**")
+    for nombre, r, v, s in zip(ACTIVOS, RENT_ANUAL, VOL_ANUAL, I_SHARPE):
+        st.markdown(f"· **{nombre}** — Rent: `{r:.1%}` | Vol: `{v:.1%}`")
+
+    st.markdown("---")
+    st.caption("Datos: RD4_1_2_Modelo_BASE_FRONTERA_EFICIENTE.xlsx")
 
 # ─────────────────────────────────────────────────────────────
-#  5. VISUALIZACIÓN
+#  4. CÁLCULOS
 # ─────────────────────────────────────────────────────────────
 
-# Estética: oscura, financiera, sofisticada
-BG       = "#0d1117"
-BG2      = "#161b22"
-GRID     = "#21262d"
-TEXT     = "#e6edf3"
-TEXT2    = "#8b949e"
-ACCENT1  = "#58a6ff"   # azul — frontera eficiente
-ACCENT2  = "#3fb950"   # verde — máx. Sharpe
-ACCENT3  = "#f78166"   # rojo-coral — mín. varianza
-ACCENT4  = "#d2a8ff"   # lila — portafolio modelo
-GOLD     = "#e3b341"   # dorado — activos individuales
+w_minvar    = calcular_minima_varianza()
+w_maxsharpe = calcular_maximo_sharpe(rf)
 
-plt.rcParams.update({
-    "figure.facecolor":  BG,
-    "axes.facecolor":    BG2,
-    "axes.edgecolor":    GRID,
-    "axes.labelcolor":   TEXT2,
-    "xtick.color":       TEXT2,
-    "ytick.color":       TEXT2,
-    "text.color":        TEXT,
-    "grid.color":        GRID,
-    "grid.linewidth":    0.6,
-    "font.family":       "DejaVu Sans",
-    "font.size":         10,
-})
+ret_minvar  = port_ret(w_minvar);    vol_minvar  = port_vol(w_minvar)
+ret_maxsh   = port_ret(w_maxsharpe); vol_maxsh   = port_vol(w_maxsharpe)
+ret_modelo  = port_ret(MEZCLA_OPTIMA); vol_modelo = port_vol(MEZCLA_OPTIMA)
 
-fig = plt.figure(figsize=(18, 12), facecolor=BG)
-fig.suptitle(
-    "FRONTERA EFICIENTE DE MARKOWITZ",
-    fontsize=20, fontweight="bold", color=TEXT, y=0.98,
-    fontfamily="DejaVu Sans"
+fe_vols, fe_rets = calcular_frontera(n_fe)
+mc_vols, mc_rets, mc_sharpes = montecarlo(n_sim)
+
+# ─────────────────────────────────────────────────────────────
+#  5. ENCABEZADO
+# ─────────────────────────────────────────────────────────────
+
+st.markdown("# 📈 Frontera Eficiente de Markowitz")
+st.markdown(
+    f"**Portafolio:** {' · '.join(ACTIVOS)}  &nbsp;|&nbsp; "
+    f"**Rf:** {rf_pct:.2f}%  &nbsp;|&nbsp;  "
+    f"**Monte Carlo:** {n_sim:,} portafolios"
 )
-
-# ── Subtítulo con activos
-sub = "  ·  ".join(ACTIVOS)
-fig.text(0.5, 0.945, sub, ha="center", fontsize=11, color=TEXT2)
-
-# Grid de subplots
-gs = fig.add_gridspec(2, 3, hspace=0.42, wspace=0.38,
-                      left=0.07, right=0.97, top=0.92, bottom=0.06)
-
-# ── 5.1  GRÁFICO PRINCIPAL: Frontera + Monte Carlo ────────────
-ax1 = fig.add_subplot(gs[0, :2])
-
-# Nube Monte Carlo coloreada por Sharpe
-sc = ax1.scatter(
-    mc_vols * 100, mc_rets * 100,
-    c=mc_sharpes, cmap="plasma", s=6, alpha=0.35, zorder=2,
-    vmin=0, vmax=mc_sharpes.max()
-)
-cbar = fig.colorbar(sc, ax=ax1, pad=0.01, fraction=0.025)
-cbar.set_label("Ratio de Sharpe", color=TEXT2, fontsize=9)
-cbar.ax.yaxis.set_tick_params(color=TEXT2)
-plt.setp(cbar.ax.yaxis.get_ticklabels(), color=TEXT2)
-
-# Frontera eficiente
-ax1.plot(
-    fe_vols * 100, fe_rets * 100,
-    color=ACCENT1, linewidth=2.8, zorder=5, label="Frontera Eficiente"
-)
-
-# Activos individuales
-for i, nombre in enumerate(ACTIVOS):
-    ax1.scatter(VOL_ANUAL[i] * 100, RENT_ANUAL[i] * 100,
-                s=90, color=GOLD, zorder=8, edgecolors="white", linewidths=0.8)
-    ax1.annotate(nombre,
-                 xy=(VOL_ANUAL[i] * 100, RENT_ANUAL[i] * 100),
-                 xytext=(6, 4), textcoords="offset points",
-                 fontsize=8.5, color=GOLD, fontweight="bold")
-
-# Portafolio mínima varianza
-ax1.scatter(vol_minvar * 100, ret_minvar * 100,
-            s=150, color=ACCENT3, marker="D", zorder=10,
-            edgecolors="white", linewidths=1.2,
-            label=f"Mín. Varianza  ({vol_minvar:.1%}, {ret_minvar:.1%})")
-
-# Portafolio máximo Sharpe
-ax1.scatter(vol_maxsharpe * 100, ret_maxsharpe * 100,
-            s=200, color=ACCENT2, marker="*", zorder=10,
-            edgecolors="white", linewidths=0.8,
-            label=f"Máx. Sharpe  ({vol_maxsharpe:.1%}, {ret_maxsharpe:.1%})")
-
-# Portafolio modelo Excel
-ax1.scatter(vol_modelo * 100, ret_modelo * 100,
-            s=160, color=ACCENT4, marker="P", zorder=10,
-            edgecolors="white", linewidths=1.0,
-            label=f"Portafolio Óptimo  ({vol_modelo:.1%}, {ret_modelo:.1%})")
-
-# Capital Market Line (desde tasa libre de riesgo = 0)
-rf = 0.0
-slope_cml = (ret_maxsharpe - rf) / vol_maxsharpe
-x_cml = np.linspace(0, vol_maxsharpe * 1.05, 100)
-y_cml = rf + slope_cml * x_cml
-ax1.plot(x_cml * 100, y_cml * 100, "--", color=ACCENT2,
-         alpha=0.55, linewidth=1.4, zorder=4, label="CML")
-
-ax1.set_xlabel("Volatilidad Anualizada (%)", fontsize=10)
-ax1.set_ylabel("Rentabilidad Anualizada (%)", fontsize=10)
-ax1.set_title("Espacio Riesgo–Rendimiento", fontsize=12, color=TEXT, pad=10)
-ax1.legend(loc="upper left", fontsize=8.5, framealpha=0.25,
-           edgecolor=GRID, facecolor=BG2)
-ax1.grid(True, alpha=0.5)
-
-# ── 5.2  COMPOSICIÓN DEL PORTAFOLIO ÓPTIMO ────────────────────
-ax2 = fig.add_subplot(gs[0, 2])
-
-colores_pie = [ACCENT1, ACCENT2, ACCENT3, ACCENT4, GOLD]
-wedges, texts, autotexts = ax2.pie(
-    MEZCLA_OPTIMA * 100,
-    labels=ACTIVOS,
-    autopct="%1.1f%%",
-    startangle=140,
-    colors=colores_pie,
-    pctdistance=0.75,
-    wedgeprops={"edgecolor": BG2, "linewidth": 2},
-    textprops={"color": TEXT, "fontsize": 9},
-)
-for at in autotexts:
-    at.set_fontsize(8)
-    at.set_color(BG)
-    at.set_fontweight("bold")
-
-ax2.set_title("Composición del\nPortafolio Óptimo", fontsize=11, color=TEXT, pad=10)
-
-# ── 5.3  RENTABILIDADES INDIVIDUALES ─────────────────────────
-ax3 = fig.add_subplot(gs[1, 0])
-
-y_pos = np.arange(N)
-bars = ax3.barh(y_pos, RENT_ANUAL * 100, color=colores_pie,
-                edgecolor=BG2, linewidth=0.8, height=0.6)
-ax3.axvline(ret_modelo * 100, color=ACCENT4, linestyle="--", linewidth=1.5,
-            label=f"Portafolio: {ret_modelo:.1%}")
-ax3.set_yticks(y_pos)
-ax3.set_yticklabels(ACTIVOS, fontsize=9)
-ax3.set_xlabel("Rentabilidad Anualizada (%)")
-ax3.set_title("Rentabilidades Individuales", fontsize=11, color=TEXT, pad=8)
-ax3.legend(fontsize=8, framealpha=0.25, edgecolor=GRID, facecolor=BG2)
-ax3.grid(True, axis="x", alpha=0.5)
-for bar, v in zip(bars, RENT_ANUAL * 100):
-    ax3.text(v + 0.3, bar.get_y() + bar.get_height() / 2,
-             f"{v:.1f}%", va="center", fontsize=8, color=TEXT)
-
-# ── 5.4  VOLATILIDADES INDIVIDUALES ──────────────────────────
-ax4 = fig.add_subplot(gs[1, 1])
-
-bars2 = ax4.barh(y_pos, VOL_ANUAL * 100, color=colores_pie,
-                 edgecolor=BG2, linewidth=0.8, height=0.6)
-ax4.axvline(vol_modelo * 100, color=ACCENT4, linestyle="--", linewidth=1.5,
-            label=f"Portafolio: {vol_modelo:.1%}")
-ax4.set_yticks(y_pos)
-ax4.set_yticklabels(ACTIVOS, fontsize=9)
-ax4.set_xlabel("Volatilidad Anualizada (%)")
-ax4.set_title("Volatilidades Individuales", fontsize=11, color=TEXT, pad=8)
-ax4.legend(fontsize=8, framealpha=0.25, edgecolor=GRID, facecolor=BG2)
-ax4.grid(True, axis="x", alpha=0.5)
-for bar, v in zip(bars2, VOL_ANUAL * 100):
-    ax4.text(v + 0.5, bar.get_y() + bar.get_height() / 2,
-             f"{v:.1f}%", va="center", fontsize=8, color=TEXT)
-
-# ── 5.5  RATIOS DE SHARPE ────────────────────────────────────
-ax5 = fig.add_subplot(gs[1, 2])
-
-# Sharpes individuales + portafolio
-todos_nombres  = ACTIVOS + ["Portafolio\nÓptimo"]
-todos_sharpes  = list(I_SHARPE) + [PORT_SHARPE]
-todos_colores  = colores_pie + [ACCENT4]
-y_pos2 = np.arange(len(todos_nombres))
-
-bars3 = ax5.barh(y_pos2, todos_sharpes, color=todos_colores,
-                 edgecolor=BG2, linewidth=0.8, height=0.6)
-ax5.set_yticks(y_pos2)
-ax5.set_yticklabels(todos_nombres, fontsize=9)
-ax5.set_xlabel("Índice de Sharpe")
-ax5.set_title("Ratios de Sharpe", fontsize=11, color=TEXT, pad=8)
-ax5.grid(True, axis="x", alpha=0.5)
-ax5.axvline(1.0, color=TEXT2, linestyle=":", linewidth=1, alpha=0.6)
-ax5.text(1.0, -0.6, "Sharpe = 1", fontsize=7, color=TEXT2, ha="center")
-for bar, v in zip(bars3, todos_sharpes):
-    ax5.text(v + 0.02, bar.get_y() + bar.get_height() / 2,
-             f"{v:.3f}", va="center", fontsize=8, color=TEXT)
-
-# ── Pie de página ──────────────────────────────────────────
-fig.text(0.5, 0.015,
-         "Modelo de Markowitz  ·  Datos: RD4_1_2_Modelo_BASE_FRONTERA_EFICIENTE  ·  "
-         "Monte Carlo: 8 000 portafolios  ·  Restricciones: w ≥ 0, Σw = 1",
-         ha="center", fontsize=8, color=TEXT2, style="italic")
-
-plt.savefig("frontera_eficiente_markowitz.png", dpi=160, bbox_inches="tight",
-            facecolor=BG)
-print("Gráfico guardado: frontera_eficiente_markowitz.png")
-plt.show()
+st.markdown("---")
 
 # ─────────────────────────────────────────────────────────────
-#  6. TABLA RESUMEN FINAL
+#  6. KPI CARDS
 # ─────────────────────────────────────────────────────────────
 
-print("\n\n── TABLA RESUMEN DEL PORTAFOLIO ÓPTIMO ─────────────────────")
-resumen = pd.DataFrame({
-    "Activo":          ACTIVOS,
-    "Peso (%)":        (MEZCLA_OPTIMA * 100).round(2),
-    "Rent. Anual (%)": (RENT_ANUAL * 100).round(2),
-    "Vol. Anual (%)":  (VOL_ANUAL * 100).round(2),
-    "Sharpe":          I_SHARPE.round(4),
-})
-resumen.set_index("Activo", inplace=True)
-print(resumen.to_string())
+c1, c2, c3, c4, c5 = st.columns(5)
 
-print(f"""
-── KPIs DEL PORTAFOLIO ÓPTIMO ───────────────────────────────
-  Rendimiento anualizado  : {ret_modelo:.4%}
-  Volatilidad anualizada  : {vol_modelo:.4%}
-  Ratio de Sharpe         : {ret_modelo/vol_modelo:.4f}
-  Valor en Riesgo (VaR 95%): ${-1.644854 * PORT_VOL_DIARIA * 10_000:.2f}  por $10,000 invertidos
-─────────────────────────────────────────────────────────────
-""")
+def kpi_card(col, valor, label, color="#58a6ff"):
+    col.markdown(f"""
+    <div class="metric-card">
+        <div class="metric-value" style="color:{color}">{valor}</div>
+        <div class="metric-label">{label}</div>
+    </div>""", unsafe_allow_html=True)
+
+kpi_card(c1, f"{ret_modelo:.2%}",         "Rent. Portafolio Óptimo", "#58a6ff")
+kpi_card(c2, f"{vol_modelo:.2%}",          "Vol. Portafolio Óptimo",  "#f78166")
+kpi_card(c3, f"{ret_modelo/vol_modelo:.4f}", "Sharpe Portafolio",       "#3fb950")
+kpi_card(c4, f"{vol_minvar:.2%}",          "Vol. Mínima Varianza",    "#d2a8ff")
+kpi_card(c5, f"{ret_maxsh/vol_maxsh:.4f}", f"Sharpe Máximo (Rf={rf_pct:.1f}%)", "#e3b341")
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────
+#  7. TABS
+# ─────────────────────────────────────────────────────────────
+
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊 Frontera Eficiente",
+    "🥧 Composición",
+    "📉 Métricas por Activo",
+    "🔢 Datos & Correlaciones",
+])
+
+# ── TAB 1: FRONTERA EFICIENTE ─────────────────────────────────
+with tab1:
+    fig = go.Figure()
+
+    # Monte Carlo
+    fig.add_trace(go.Scatter(
+        x=mc_vols*100, y=mc_rets*100,
+        mode="markers",
+        marker=dict(size=4, color=mc_sharpes, colorscale="Plasma",
+                    opacity=0.4, showscale=True,
+                    colorbar=dict(title="Sharpe", x=1.01, thickness=14,
+                                  tickfont=dict(color="#8b949e"),
+                                  titlefont=dict(color="#8b949e"))),
+        name="Monte Carlo", hovertemplate="Vol: %{x:.2f}%<br>Ret: %{y:.2f}%<extra></extra>",
+    ))
+
+    # Frontera eficiente
+    fig.add_trace(go.Scatter(
+        x=fe_vols*100, y=fe_rets*100,
+        mode="lines", line=dict(color="#58a6ff", width=3),
+        name="Frontera Eficiente",
+        hovertemplate="Vol: %{x:.2f}%<br>Ret: %{y:.2f}%<extra>Frontera</extra>",
+    ))
+
+    # CML
+    if mostrar_cml:
+        slope = (ret_maxsh - rf) / vol_maxsh
+        x_cml = np.linspace(0, vol_maxsh * 1.1, 80)
+        y_cml = rf + slope * x_cml
+        fig.add_trace(go.Scatter(
+            x=x_cml*100, y=y_cml*100,
+            mode="lines", line=dict(color="#3fb950", width=1.8, dash="dash"),
+            name=f"CML (Rf={rf_pct:.1f}%)",
+        ))
+
+    # Activos individuales
+    if mostrar_activos:
+        fig.add_trace(go.Scatter(
+            x=VOL_ANUAL*100, y=RENT_ANUAL*100,
+            mode="markers+text",
+            marker=dict(size=12, color="#e3b341", symbol="circle",
+                        line=dict(color="white", width=1.5)),
+            text=ACTIVOS, textposition="top right",
+            textfont=dict(color="#e3b341", size=11),
+            name="Activos individuales",
+            hovertemplate="%{text}<br>Vol: %{x:.2f}%<br>Ret: %{y:.2f}%<extra></extra>",
+        ))
+
+    # Mínima varianza
+    fig.add_trace(go.Scatter(
+        x=[vol_minvar*100], y=[ret_minvar*100],
+        mode="markers+text",
+        marker=dict(size=16, color="#f78166", symbol="diamond",
+                    line=dict(color="white", width=1.5)),
+        text=["Mín. Varianza"], textposition="bottom right",
+        textfont=dict(color="#f78166", size=10),
+        name=f"Mín. Varianza ({vol_minvar:.1%})",
+        hovertemplate=f"Vol: {vol_minvar:.2%}<br>Ret: {ret_minvar:.2%}<extra>Mín. Varianza</extra>",
+    ))
+
+    # Máximo Sharpe
+    fig.add_trace(go.Scatter(
+        x=[vol_maxsh*100], y=[ret_maxsh*100],
+        mode="markers+text",
+        marker=dict(size=20, color="#3fb950", symbol="star",
+                    line=dict(color="white", width=1)),
+        text=["Máx. Sharpe"], textposition="top left",
+        textfont=dict(color="#3fb950", size=10),
+        name=f"Máx. Sharpe ({vol_maxsh:.1%})",
+        hovertemplate=f"Vol: {vol_maxsh:.2%}<br>Ret: {ret_maxsh:.2%}<extra>Máx. Sharpe</extra>",
+    ))
+
+    # Portafolio modelo
+    if mostrar_modelo:
+        fig.add_trace(go.Scatter(
+            x=[vol_modelo*100], y=[ret_modelo*100],
+            mode="markers+text",
+            marker=dict(size=16, color="#d2a8ff", symbol="cross",
+                        line=dict(color="white", width=1.5)),
+            text=["Portafolio Excel"], textposition="top right",
+            textfont=dict(color="#d2a8ff", size=10),
+            name=f"Portafolio Excel ({vol_modelo:.1%})",
+            hovertemplate=f"Vol: {vol_modelo:.2%}<br>Ret: {ret_modelo:.2%}<extra>Portafolio Excel</extra>",
+        ))
+
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0d1117", plot_bgcolor="#161b22",
+        title=dict(text="Espacio Riesgo–Rendimiento  ·  Frontera Eficiente de Markowitz",
+                   font=dict(size=16, color="#e6edf3")),
+        xaxis=dict(title="Volatilidad Anualizada (%)", gridcolor="#21262d",
+                   zeroline=False),
+        yaxis=dict(title="Rentabilidad Anualizada (%)", gridcolor="#21262d",
+                   zeroline=False),
+        legend=dict(bgcolor="#161b22", bordercolor="#21262d", borderwidth=1,
+                    font=dict(color="#e6edf3", size=11)),
+        height=580,
+        hovermode="closest",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Tabla portafolios clave
+    st.markdown("#### Portafolios Clave")
+    tabla_clave = pd.DataFrame({
+        "Portafolio":     ["Mínima Varianza", "Máximo Sharpe", "Portafolio Excel"],
+        "Rentabilidad":   [f"{ret_minvar:.2%}", f"{ret_maxsh:.2%}", f"{ret_modelo:.2%}"],
+        "Volatilidad":    [f"{vol_minvar:.2%}", f"{vol_maxsh:.2%}", f"{vol_modelo:.2%}"],
+        "Ratio de Sharpe":[f"{ret_minvar/vol_minvar:.4f}", f"{ret_maxsh/vol_maxsh:.4f}", f"{ret_modelo/vol_modelo:.4f}"],
+    })
+    st.dataframe(tabla_clave, hide_index=True, use_container_width=True)
+
+# ── TAB 2: COMPOSICIÓN ────────────────────────────────────────
+with tab2:
+    col_a, col_b = st.columns([1, 1])
+
+    with col_a:
+        colores = ["#58a6ff","#3fb950","#f78166","#d2a8ff","#e3b341"]
+        fig_pie = go.Figure(go.Pie(
+            labels=ACTIVOS,
+            values=(MEZCLA_OPTIMA*100).round(2),
+            marker=dict(colors=colores,
+                        line=dict(color="#0d1117", width=2.5)),
+            textinfo="label+percent",
+            textfont=dict(size=13),
+            hole=0.35,
+            pull=[0.04]*N,
+        ))
+        fig_pie.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#0d1117", plot_bgcolor="#161b22",
+            title=dict(text="Portafolio Óptimo — Mezcla Excel",
+                       font=dict(color="#e6edf3", size=14)),
+            legend=dict(font=dict(color="#e6edf3")),
+            height=420,
+            showlegend=True,
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    with col_b:
+        fig_ms = go.Figure(go.Pie(
+            labels=ACTIVOS,
+            values=(w_maxsharpe*100).round(2),
+            marker=dict(colors=colores,
+                        line=dict(color="#0d1117", width=2.5)),
+            textinfo="label+percent",
+            textfont=dict(size=13),
+            hole=0.35,
+        ))
+        fig_ms.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#0d1117", plot_bgcolor="#161b22",
+            title=dict(text=f"Portafolio Máx. Sharpe (Rf={rf_pct:.1f}%)",
+                       font=dict(color="#e6edf3", size=14)),
+            legend=dict(font=dict(color="#e6edf3")),
+            height=420,
+        )
+        st.plotly_chart(fig_ms, use_container_width=True)
+
+    # Tabla comparativa de pesos
+    st.markdown("#### Pesos por Portafolio")
+    df_pesos = pd.DataFrame({
+        "Activo":             ACTIVOS,
+        "Excel (%)":          (MEZCLA_OPTIMA*100).round(2),
+        "Máx. Sharpe (%)":    (w_maxsharpe*100).round(2),
+        "Mín. Varianza (%)":  (w_minvar*100).round(2),
+    })
+    st.dataframe(df_pesos, hide_index=True, use_container_width=True)
+
+# ── TAB 3: MÉTRICAS POR ACTIVO ────────────────────────────────
+with tab3:
+    fig_met = make_subplots(
+        rows=1, cols=3,
+        subplot_titles=("Rentabilidad Anualizada (%)",
+                        "Volatilidad Anualizada (%)",
+                        "Ratio de Sharpe"),
+    )
+    colores = ["#58a6ff","#3fb950","#f78166","#d2a8ff","#e3b341"]
+
+    # Rentabilidades
+    fig_met.add_trace(go.Bar(
+        x=ACTIVOS, y=(RENT_ANUAL*100).round(2),
+        marker_color=colores, text=[f"{v:.1f}%" for v in RENT_ANUAL*100],
+        textposition="outside", showlegend=False,
+    ), row=1, col=1)
+    fig_met.add_hline(y=ret_modelo*100, line_dash="dash",
+                      line_color="#d2a8ff", row=1, col=1,
+                      annotation_text=f"Portafolio: {ret_modelo:.1%}",
+                      annotation_font_color="#d2a8ff")
+
+    # Volatilidades
+    fig_met.add_trace(go.Bar(
+        x=ACTIVOS, y=(VOL_ANUAL*100).round(2),
+        marker_color=colores, text=[f"{v:.1f}%" for v in VOL_ANUAL*100],
+        textposition="outside", showlegend=False,
+    ), row=1, col=2)
+    fig_met.add_hline(y=vol_modelo*100, line_dash="dash",
+                      line_color="#d2a8ff", row=1, col=2,
+                      annotation_text=f"Portafolio: {vol_modelo:.1%}",
+                      annotation_font_color="#d2a8ff")
+
+    # Sharpes
+    todos_s = list(I_SHARPE) + [PORT_SHARPE]
+    todos_n = ACTIVOS + ["Portafolio"]
+    todos_c = colores + ["#d2a8ff"]
+    fig_met.add_trace(go.Bar(
+        x=todos_n, y=[round(v,4) for v in todos_s],
+        marker_color=todos_c,
+        text=[f"{v:.3f}" for v in todos_s],
+        textposition="outside", showlegend=False,
+    ), row=1, col=3)
+    fig_met.add_hline(y=1.0, line_dash="dot", line_color="#8b949e",
+                      row=1, col=3)
+
+    fig_met.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0d1117", plot_bgcolor="#161b22",
+        height=440,
+        font=dict(color="#e6edf3"),
+        title=dict(text="Métricas Comparativas por Activo",
+                   font=dict(size=15, color="#e6edf3")),
+    )
+    fig_met.update_yaxes(gridcolor="#21262d")
+    st.plotly_chart(fig_met, use_container_width=True)
+
+# ── TAB 4: DATOS & CORRELACIONES ─────────────────────────────
+with tab4:
+    col_x, col_y = st.columns([1, 1])
+
+    with col_x:
+        st.markdown("#### Indicadores por Activo")
+        df_ind = pd.DataFrame({
+            "Activo":            ACTIVOS,
+            "Rent. Diaria":      [f"{v:.4%}" for v in RENT_ANUAL/252],
+            "Rent. Anual":       [f"{v:.2%}" for v in RENT_ANUAL],
+            "Vol. Diaria":       [f"{v:.4%}" for v in VOL_ANUAL/np.sqrt(252)],
+            "Vol. Anual":        [f"{v:.2%}" for v in VOL_ANUAL],
+            "Sharpe":            [f"{v:.4f}" for v in I_SHARPE],
+            "VaR 95% ($10k)":    [f"${-1.6449*v/np.sqrt(252)*10000:.2f}" for v in VOL_ANUAL],
+        })
+        st.dataframe(df_ind, hide_index=True, use_container_width=True)
+
+    with col_y:
+        st.markdown("#### Matriz de Correlaciones")
+        stds = np.sqrt(np.diag(COV_DIARIA))
+        corr = COV_DIARIA / np.outer(stds, stds)
+        df_corr = pd.DataFrame(corr.round(4), index=ACTIVOS, columns=ACTIVOS)
+
+        fig_corr = go.Figure(go.Heatmap(
+            z=corr, x=ACTIVOS, y=ACTIVOS,
+            colorscale="RdBu_r", zmid=0,
+            text=corr.round(2), texttemplate="%{text}",
+            textfont=dict(size=12),
+            colorbar=dict(thickness=14, tickfont=dict(color="#8b949e"),
+                          titlefont=dict(color="#8b949e")),
+        ))
+        fig_corr.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#0d1117", plot_bgcolor="#161b22",
+            height=320,
+            font=dict(color="#e6edf3"),
+            margin=dict(l=10, r=10, t=20, b=10),
+        )
+        st.plotly_chart(fig_corr, use_container_width=True)
+
+    st.markdown("#### Matriz de Covarianzas (anualizada)")
+    df_cov = pd.DataFrame((COV_ANUAL*1e4).round(4), index=ACTIVOS, columns=ACTIVOS)
+    st.dataframe(df_cov.style.background_gradient(cmap="Blues", axis=None),
+                 use_container_width=True)
+    st.caption("Valores × 10⁻⁴ para legibilidad")
+
+# ─────────────────────────────────────────────────────────────
+#  8. PIE DE PÁGINA
+# ─────────────────────────────────────────────────────────────
+st.markdown("---")
+st.caption(
+    "Modelo de Markowitz (1952)  ·  Datos: RD4_1_2_Modelo_BASE_FRONTERA_EFICIENTE.xlsx  ·  "
+    "Restricciones: wᵢ ≥ 0,  Σwᵢ = 1  ·  Covarianzas anualizadas × 252 días"
+)
