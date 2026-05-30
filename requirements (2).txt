@@ -1,0 +1,27 @@
+# ============================================================
+#  FRONTERA EFICIENTE DE MARKOWITZ
+#  Dependencias del proyecto
+# ============================================================
+#
+#  Instalación:
+#    pip install -r requirements.txt
+#
+# ============================================================
+
+# Cálculo numérico y álgebra lineal (matrices de covarianza,
+# pesos de portafolio, operaciones vectorizadas)
+numpy==2.4.4
+
+# Manipulación de datos tabulares y lectura de archivos Excel
+pandas==3.0.2
+
+# Visualización: gráficos de frontera eficiente, Monte Carlo,
+# barras, pie chart y anotaciones
+matplotlib==3.10.8
+
+# Optimización cuadrática para cálculo de portafolios óptimos
+# (mínima varianza, máximo Sharpe, frontera eficiente)
+scipy==1.17.1
+
+# Motor de lectura de archivos .xlsx (dependencia de pandas)
+openpyxl>=3.1.0
